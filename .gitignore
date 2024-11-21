@@ -8,3 +8,4 @@ __pycache__/
 # Ignore data files
 data/*.bin
 data/*.sqlite
+data/*.nb

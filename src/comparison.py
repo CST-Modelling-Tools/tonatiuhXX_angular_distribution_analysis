@@ -152,7 +152,7 @@ if __name__ == "__main__":
     # Setup
     ascii_file = "data/photons_parameters.txt"
     binary_dir = "data"
-    surface_id = 7
+    surface_id = 3
     parameter_names, surfaces, power_per_photon = parse_ascii_file(ascii_file)
     num_parameters = len(parameter_names)
     binary_files = sorted([os.path.join(binary_dir, f) for f in os.listdir(binary_dir) if re.match(r"photons.*\.dat", f)])

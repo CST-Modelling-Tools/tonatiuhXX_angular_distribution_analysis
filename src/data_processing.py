@@ -1,7 +1,5 @@
 import numpy as np
 import os
-import re
-from multiprocessing import Pool
 
 def parse_ascii_file(ascii_file):
     """
@@ -45,136 +43,134 @@ def parse_ascii_file(ascii_file):
 
     return parameter_names, surfaces, power_per_photon
 
-def process_binary_file(args):
+def process_binary_file_sequential(file_path, num_parameters):
     """
-    Processes a single binary file to filter relevant photons.
+    Processes a single binary file to build ray trajectories sequentially.
 
     Args:
-        args (tuple): (file_path, num_parameters, surface_id, chunk_size)
-
-    Returns:
-        tuple: (relevant_photons, previous_ids)
-            - relevant_photons: Photons hitting the specified surface.
-            - previous_ids: Set of previous IDs collected.
-    """
-    file_path, num_parameters, surface_id, chunk_size = args
-    relevant_photons = []
-    previous_ids = set()
-
-    with open(file_path, "rb") as f:
-        while True:
-            # Read a chunk of data
-            chunk = np.fromfile(f, dtype=">f8", count=chunk_size * num_parameters)
-            if chunk.size == 0:
-                break  # End of file
-
-            # Reshape into photon records
-            chunk = chunk.reshape(-1, num_parameters)
-
-            # Filter photons hitting the specified surface
-            photons_on_surface = chunk[chunk[:, -1] == surface_id]
-            relevant_photons.append(photons_on_surface)
-
-            # Collect previous IDs for further filtering
-            previous_ids.update(photons_on_surface[:, 5][photons_on_surface[:, 5] != 0])
-
-    # Combine all relevant photons into a single array
-    relevant_photons = np.vstack(relevant_photons) if relevant_photons else np.empty((0, num_parameters))
-    return relevant_photons, previous_ids
-
-
-def combine_results(results, binary_files, num_parameters):
-    """
-    Combines results from all parallel processes and ensures all previous IDs are processed.
-
-    Args:
-        results (list): List of (relevant_photons, previous_ids) tuples from processes.
-        binary_files (list): List of binary files for reprocessing previous IDs.
+        file_path (str): Path to the binary file.
         num_parameters (int): Number of parameters per photon.
 
     Returns:
-        np.ndarray: Combined and deduplicated photon records.
+        list: List of ray trajectories. Each trajectory is a list of photon records.
     """
-    all_photons = []
-    all_previous_ids = set()
+    photons = np.fromfile(file_path, dtype=">f8").reshape(-1, num_parameters)
+    photon_dict = {int(photon[0]): photon for photon in photons}  # Map photon IDs to photon records
 
-    # Combine photons and collect previous IDs
-    for photons, previous_ids in results:
-        all_photons.append(photons)
-        all_previous_ids.update(previous_ids)
-
-    # Combine all photon records
-    combined_photons = np.vstack(all_photons)
-
-    # Process previous photons
-    previous_photons = []
-    if all_previous_ids:
-        for binary_file in binary_files:
-            with open(binary_file, "rb") as f:
-                all_photons_in_file = np.fromfile(f, dtype=">f8").reshape(-1, num_parameters)
-                for pid in all_previous_ids:
-                    matching_photon = all_photons_in_file[all_photons_in_file[:, 0] == pid]
-                    if len(matching_photon) > 0:
-                        previous_photons.append(matching_photon[0])
-
-    # Add previous photons to combined data
-    if previous_photons:
-        combined_photons = np.vstack((combined_photons, np.array(previous_photons)))
-
-    # Deduplicate photons (ensure unique photon IDs)
-    _, unique_indices = np.unique(combined_photons[:, 0], return_index=True)
-    combined_photons = combined_photons[unique_indices]
-
-    return combined_photons
+    # Build ray trajectories
+    trajectories = []
+    for photon in photons:
+        if int(photon[5]) == 0:  # Start of a trajectory (previous ID = 0)
+            trajectory = []
+            current_id = int(photon[0])
+            while current_id != 0:
+                trajectory.append(photon_dict[current_id])
+                current_id = int(photon_dict[current_id][6]) if current_id in photon_dict else 0
+            trajectories.append(trajectory)
+    
+    return trajectories
 
 
-def parallel_filter_photons(binary_files, num_parameters, surface_id, chunk_size=10_000, num_workers=4):
+def consolidate_trajectories(all_trajectories):
     """
-    Filters photons in parallel across multiple binary files.
+    Consolidates ray trajectories across multiple files.
+
+    Args:
+        all_trajectories (list): List of ray trajectories from all files.
+
+    Returns:
+        list: Consolidated ray trajectories.
+    """
+    trajectory_map = {}  # Map of trajectory start ID to trajectory
+
+    for trajectory in all_trajectories:
+        start_id = int(trajectory[0][0])  # Use the ID of the first photon in the trajectory
+        if start_id in trajectory_map:
+            raise ValueError(f"Duplicate trajectory start ID found: {start_id}")
+        trajectory_map[start_id] = trajectory
+
+    # Consolidate overlapping trajectories
+    consolidated = []
+    visited = set()
+
+    for trajectory in trajectory_map.values():
+        if int(trajectory[0][0]) in visited:  # Skip already consolidated trajectories
+            continue
+
+        consolidated_trajectory = trajectory
+        visited.add(int(trajectory[0][0]))
+
+        # Check for continuation of the trajectory
+        while True:
+            next_id = int(consolidated_trajectory[-1][6])  # Next ID of the last photon
+            if next_id == 0 or next_id not in trajectory_map:
+                break
+            consolidated_trajectory += trajectory_map[next_id]
+            visited.add(next_id)
+
+        consolidated.append(consolidated_trajectory)
+
+    return consolidated
+
+
+def filter_relevant_trajectories(trajectories, surface_id):
+    """
+    Filters and extracts relevant photons from trajectories.
+
+    Args:
+        trajectories (list): List of ray trajectories.
+        surface_id (int): Surface ID of interest.
+
+    Returns:
+        np.ndarray: Array of filtered photon records.
+    """
+    relevant_photons = []
+
+    for trajectory in trajectories:
+        # Skip trajectories with no length
+        if len(trajectory) < 2:
+            continue
+
+        # Check if any photon in the trajectory is on the surface of interest
+        surface_photons = [p for p in trajectory if int(p[-1]) == surface_id]
+        if not surface_photons:
+            continue
+
+        # Extract the surface photon and its previous photon
+        surface_photon = surface_photons[0]
+        previous_id = int(surface_photon[5])
+        previous_photon = next((p for p in trajectory if int(p[0]) == previous_id), None)
+
+        if previous_photon is not None:
+            relevant_photons.append(previous_photon)
+        relevant_photons.append(surface_photon)
+
+    return np.array(relevant_photons)
+
+
+def process_binary_files_sequential(binary_files, num_parameters, surface_id):
+    """
+    Processes all binary files sequentially and consolidates trajectories.
 
     Args:
         binary_files (list): List of binary file paths.
         num_parameters (int): Number of parameters per photon.
         surface_id (int): Surface ID of interest.
-        chunk_size (int): Number of photons to read per chunk.
-        num_workers (int): Number of parallel workers.
 
     Returns:
         np.ndarray: Array of relevant photon records.
     """
-    # Prepare arguments for each binary file
-    args = [(file, num_parameters, surface_id, chunk_size) for file in binary_files]
+    all_trajectories = []
 
-    # Use a multiprocessing pool to process files in parallel
-    with Pool(processes=num_workers) as pool:
-        results = pool.map(process_binary_file, args)
+    # Process each binary file
+    for file_path in binary_files:
+        file_trajectories = process_binary_file_sequential(file_path, num_parameters)
+        all_trajectories.extend(file_trajectories)
 
-    # Combine results from all processes
-    combined_photons = combine_results(results, binary_files, num_parameters)
+    # Consolidate trajectories across files
+    consolidated_trajectories = consolidate_trajectories(all_trajectories)
 
-    return combined_photons
+    # Filter relevant photons
+    relevant_photons = filter_relevant_trajectories(consolidated_trajectories, surface_id)
 
-
-if __name__ == "__main__":
-    ascii_file = "data/photons_parameters.txt"
-    binary_dir = "data"
-    surface_id = 7  # Specify the surface ID of interest
-
-    # Parse the ASCII file to get parameter information
-    parameter_names, surfaces, power_per_photon = parse_ascii_file(ascii_file)
-    num_parameters = len(parameter_names)
-
-    # Detect binary files
-    binary_files = sorted(
-        [os.path.join(binary_dir, f) for f in os.listdir(binary_dir) if re.match(r"photons.*\.dat", f)]
-    )
-
-    # Perform parallel filtering
-    num_workers = os.cpu_count()  # Use all available cores
-    filtered_photon_records = parallel_filter_photons(binary_files, num_parameters, surface_id, num_workers=num_workers)
-
-    # Display results
-    print(f"Number of relevant photons: {len(filtered_photon_records)}")
-
-    formatted_record = np.array2string(filtered_photon_records[0], formatter={'float_kind': lambda x: f"{x:.2f}"})
-    print(f"Example Photon Record: {formatted_record}")
+    return relevant_photons
