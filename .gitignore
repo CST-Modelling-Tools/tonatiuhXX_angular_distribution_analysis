@@ -9,3 +9,6 @@ __pycache__/
 data/*.bin
 data/*.sqlite
 data/*.nb
+
+# Ignore figures
+*.png
