@@ -1,14 +1,18 @@
 import os
 import re
+import sys
 import numpy as np
 import matplotlib.pyplot as plt
 import time
 
 from scipy.spatial import ConvexHull
 
+# Add the modules folder to the Python path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../modules")))
+
 from data_processing import parse_ascii_file, process_binary_files_sequential
+from compute_directions import compute_directions
 from transformation import (
-    compute_directions,
     transform_to_local,
     compute_angular_deviation,
     compute_local_coordinate_system,

@@ -9,6 +9,14 @@ __pycache__/
 data/*.bin
 data/*.sqlite
 data/*.nb
+data/*.txt
+data/*.dat
 
 # Ignore figures
 *.png
+
+# Ignore the modules directory
+src/modules/
+
+# Ignore the build directory
+/build/

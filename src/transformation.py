@@ -1,4 +1,12 @@
 import numpy as np
+import os
+import sys
+
+# Ensure the modules folder is in the Python path to import the .pyd module
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../modules")))
+
+from compute_directions import compute_directions  # Import from the .pyd module
+
 
 def spherical_to_cartesian(azimuth, elevation):
     """
@@ -20,43 +28,6 @@ def spherical_to_cartesian(azimuth, elevation):
 
     return np.array([x, y, z])
 
-def compute_directions(photon_records):
-    """
-    Computes normalized direction vectors for photons based on their previous photon IDs.
-
-    Args:
-        photon_records (np.ndarray): Array of photon records.
-
-    Returns:
-        np.ndarray: Array of normalized direction vectors, pointing toward the photon source.
-    """
-    photon_positions = photon_records[:, 1:4]  # x, y, z of the current photon
-    photon_ids = photon_records[:, 0]          # Photon IDs
-    previous_ids = photon_records[:, 5]        # Previous photon IDs
-
-    # Initialize direction vectors
-    direction_vectors = np.zeros_like(photon_positions)
-
-    # Compute directions by looking up previous photon positions
-    for i, previous_id in enumerate(previous_ids):
-        if previous_id == 0:  # No valid previous photon
-            continue
-        # Locate the record with the matching previous ID
-        previous_index = np.where(photon_ids == previous_id)[0]
-        if len(previous_index) > 0:
-            # Compute the direction vector (from previous position to current position)
-            direction_vector = photon_positions[previous_index[0]] - photon_positions[i]
-            
-            # Normalize the direction vector
-            magnitude = np.linalg.norm(direction_vector)
-            if magnitude != 0:
-                direction_vectors[i] = direction_vector / magnitude
-
-    # Remove null vectors (rows with all zeros)
-    non_null_indices = ~np.all(direction_vectors == 0, axis=1)
-    direction_vectors = direction_vectors[non_null_indices]
-
-    return direction_vectors
 
 def compute_angular_deviation(direction_vectors, reference_vector):
     """
@@ -79,6 +50,7 @@ def compute_angular_deviation(direction_vectors, reference_vector):
     angular_deviations = np.degrees(np.arccos(dot_products))
 
     return angular_deviations
+
 
 def compute_local_coordinate_system(azimuth, elevation):
     """
