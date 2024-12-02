@@ -1,45 +1,65 @@
-#include "raypathserver.h"
 #include <iostream>
+#include <fstream>
 #include <chrono>
 #include <vector>
+#include <tuple>
 
-int main()
-{
+#include "raypathserver.h"
+#include "raypathdirectionsprocessor.h"
+#include "parallelprocessor.h"
+
+int main() {
     try {
+         // Input directory and surface path for processing
+        std::string directoryPath = "C:/Users/manue_6t240gh/Dropbox/OpenSource/angular_distribution/data";
+        std::string surfacePath = "Node/ReceiverGroup/InputAperture/InputApertureRotationX/Shape";
+        std::string outputfilePath = "C:/Users/manue_6t240gh/Dropbox/OpenSource/angular_distribution/data/results.csv";
 
-        // Start measuring time
+        // Initialize the RaypathServer and Processor
+        RaypathServer server(directoryPath, surfacePath);
+        int32_t surfaceID = server.getReferenceSurfaceID();
+        RaypathDirectionsProcessor processor(surfaceID);
+
+        // Parallel processor configuration
+        size_t numThreads = std::thread::hardware_concurrency(); // Use max available threads
+        size_t batchSize = 10000; // Number of ray paths processed in each batch
+
+        ParallelProcessor<std::tuple<vec3d, vec3d, double>> parallelProcessor(numThreads, batchSize);
+
+        // Start timing
         auto startTime = std::chrono::high_resolution_clock::now();
 
-        // Instantiate RaypathServer with the directory containing the Tonatiuh++ files
-        RaypathServer server("C:/Users/manue_6t240gh/Dropbox/OpenSource/angular_distribution/data", "//Node/ReceiverGroup/InputAperture/InputApertureRotationX/Shape");
-        server.reset(); // Reset server to start fresh for each batch size test
+        // Process ray paths and collect results
+        auto results = parallelProcessor.processRayPaths(server, processor);
 
-        const size_t batchSize = 11000000; // Maximum batch size to test
-
-        size_t totalPhotonsRead = 0;
-
-        // Loop until all photons are read
-        while (true) {
-            auto photons = server.servePhotons(batchSize);
-            totalPhotonsRead += photons.size();
-
-            // Stop if no more photons are available
-            if (photons.empty()) {
-                break;
-            }
-        }
-
-        // Stop measuring time
+        // End timing
         auto endTime = std::chrono::high_resolution_clock::now();
         double elapsedTime = std::chrono::duration<double>(endTime - startTime).count();
 
-        std::cout << "Batch Size: " << batchSize
-                  << ", Total Photons Read: " << totalPhotonsRead
-                 << ", Time: " << elapsedTime << " seconds\n";
+        // Write results to a CSV file
+        std::ofstream outputFile(outputfilePath);
+        if (!outputFile.is_open()) {
+            throw std::runtime_error("Failed to open results.csv for writing");
+        }
 
+        // Write header
+        outputFile << "PhotonAX,PhotonAY,PhotonAZ,DirectionX,DirectionY,DirectionZ,Length\n";
 
+        // Write each result
+        for (const auto& result : results) {
+            const auto& [photonA, direction, length] = result;
+            outputFile << photonA.x << "," << photonA.y << "," << photonA.z << ","
+                       << direction.x << "," << direction.y << "," << direction.z << ","
+                       << length << "\n";
+        }
+
+        outputFile.close();
+
+        // Print elapsed time
+        std::cout << "Processed all ray paths in " << elapsedTime << " seconds.\n";
     } catch (const std::exception& ex) {
         std::cerr << "Error: " << ex.what() << '\n';
+        return 1;
     }
 
     return 0;

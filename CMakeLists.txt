@@ -19,6 +19,7 @@ set(SOURCES
     src/vec2d.cpp
     src/vec3d.cpp
     src/raypathserver.cpp
+    src/raypathdirectionsprocessor.cpp
     # Add more source files here if needed later
 )
 

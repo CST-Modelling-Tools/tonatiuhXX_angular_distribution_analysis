@@ -1,36 +1,27 @@
-#include <iostream>
 #include <fstream>
-#include <sstream>
 #include <stdexcept>
-#include <algorithm>
+#include <iostream>
+#include <sstream>
 
-#include "gcf.h"
 #include "raypathserver.h"
+#include "gcf.h"
 
 namespace fs = std::filesystem;
 
+// Constructor
 RaypathServer::RaypathServer(const std::string& directoryPath, const std::string& surfacePath)
-    : m_directoryPath(directoryPath), m_surfacePath(surfacePath), m_surfaceID(-1), m_photonPower(0.0)
-{
+    : m_directoryPath(directoryPath),  m_surfacePath(surfacePath) {
     validateDirectory();
     readMetadataFile();
     validateDataFiles();
 }
 
-void RaypathServer::reset()
-{
-    m_currentFileIndex = 0;   // Reset file index
-    m_currentPhotonIndex = 0; // Reset photon index within the file
-}
-
-void RaypathServer::validateDirectory()
-{
-    // Check if the directory exists
+// Validate the directory and locate the metadata file
+void RaypathServer::validateDirectory() {
     if (!fs::exists(m_directoryPath) || !fs::is_directory(m_directoryPath)) {
         throw std::invalid_argument("Invalid directory path: " + m_directoryPath.string());
     }
 
-    // Look for the .txt file containing metadata
     bool metadataFound = false;
     for (const auto& entry : fs::directory_iterator(m_directoryPath)) {
         if (entry.is_regular_file() && entry.path().extension() == ".txt") {
@@ -45,191 +36,185 @@ void RaypathServer::validateDirectory()
     }
 }
 
-void RaypathServer::readMetadataFile()
-{
-    // Open the metadata file
+void RaypathServer::readMetadataFile() {
     std::ifstream file(m_metadataFile);
     if (!file.is_open()) {
         throw std::runtime_error("Failed to open metadata file: " + m_metadataFile.string());
     }
 
-    // Variables to track state
+    std::string line;
     bool parametersSectionStarted = false;
     bool parametersSectionEnded = false;
     bool surfacesSectionStarted = false;
-    std::string line;
+
+    static const std::vector<std::string> expectedParameters = {
+        "id", "x", "y", "z", "side", "previous ID", "next ID", "surface ID"
+    };
 
     while (std::getline(file, line)) {
-        // Strip whitespace
+        // Clean up the line by trimming trailing whitespace
         line.erase(line.find_last_not_of(" \t\r\n") + 1);
 
-        // Check the PARAMETERS section structure
         if (line == "START PARAMETERS") {
+            if (parametersSectionStarted) {
+                throw std::runtime_error("Duplicate START PARAMETERS found in metadata file.");
+            }
             parametersSectionStarted = true;
-            continue;
-        }
-        if (line == "END PARAMETERS") {
+        } else if (line == "END PARAMETERS") {
             if (!parametersSectionStarted) {
-                throw std::runtime_error("END PARAMETERS found without START PARAMETERS.");
+                throw std::runtime_error("END PARAMETERS found before START PARAMETERS in metadata file.");
             }
             parametersSectionEnded = true;
-            continue;
-        }
-        if (parametersSectionStarted && !parametersSectionEnded) {
-            static const std::vector<std::string> expectedParameters = {
-                "id", "x", "y", "z", "side", "previous ID", "next ID", "surface ID"};
+        } else if (parametersSectionStarted && !parametersSectionEnded) {
+            // Validate parameters
             if (std::find(expectedParameters.begin(), expectedParameters.end(), line) == expectedParameters.end()) {
                 throw std::runtime_error("Unexpected parameter in PARAMETERS section: " + line);
             }
-        }
-
-        // Look for the surfacePath in the SURFACES section
-        if (line == "START SURFACES") {
+        } else if (line == "START SURFACES") {
             surfacesSectionStarted = true;
-            continue;
-        }
-        if (surfacesSectionStarted && line.find(m_surfacePath) != std::string::npos) {
+        } else if (surfacesSectionStarted && line.find(m_surfacePath) != std::string::npos) {
+            // Extract the first number as surface ID
             std::istringstream iss(line);
-            iss >> m_surfaceID; // Extract the first number as surface ID
+            iss >> m_surfaceID;
+
             if (iss.fail()) {
-                throw std::runtime_error("Failed to parse surface ID for surface path: " + m_surfacePath);
+                throw std::runtime_error("Failed to parse surfaceID for surface path: " + m_surfacePath);
             }
         }
     }
 
-    // Ensure the PARAMETERS section structure is complete
+    // Ensure PARAMETERS section was properly delimited
     if (!parametersSectionStarted || !parametersSectionEnded) {
-        throw std::runtime_error("Incomplete PARAMETERS section in metadata file.");
+        throw std::runtime_error("PARAMETERS section is incomplete in metadata file.");
     }
 
-    // Get the power associated with each photon from the last line of text
-    std::string lastTextLine;
-    file.clear();
-    file.seekg(0, std::ios::beg);
-    while (std::getline(file, line)) {
-        if (!line.empty()) {
-            lastTextLine = line;
-        }
+    // Ensure the SURFACES section was reached
+    if (!surfacesSectionStarted) {
+        throw std::runtime_error("SURFACES section not found in metadata file.");
     }
-    std::istringstream iss(lastTextLine);
-    if (!(iss >> m_photonPower)) {
-        throw std::runtime_error("Failed to parse photon power from the last line of the metadata file.");
-    }
-
-    file.close();
-
-    std::cout << "Metadata successfully read.\n";
-    std::cout << "Surface ID: " << m_surfaceID << "\n";
-    std::cout << "Photon Power: " << m_photonPower << " W\n";
 }
 
-void RaypathServer::validateDataFiles()
-{
-    std::vector<std::pair<int, std::string>> fileIndexPairs;
-
-    // Look for .dat files in the directory
+// Validate .dat files
+void RaypathServer::validateDataFiles() {
     for (const auto& entry : fs::directory_iterator(m_directoryPath)) {
         if (entry.is_regular_file() && entry.path().extension() == ".dat") {
-            std::string filename = entry.path().filename().string();
-            size_t underscorePos = filename.find('_');
-            size_t dotPos = filename.rfind('.');
-
-            if (underscorePos != std::string::npos && dotPos != std::string::npos) {
-                try {
-                    int fileIndex = std::stoi(filename.substr(underscorePos + 1, dotPos - underscorePos - 1));
-                    fileIndexPairs.emplace_back(fileIndex, entry.path().string());
-                } catch (const std::invalid_argument&) {
-                    throw std::runtime_error("Failed to parse number from file: " + filename);
-                }
-            }
+            m_dataFiles.push_back(entry.path().string());
         }
     }
 
-    if (fileIndexPairs.empty()) {
+    if (m_dataFiles.empty()) {
         throw std::runtime_error("No .dat files found in directory: " + m_directoryPath.string());
     }
 
-    // Sort files by the extracted number
-    std::sort(fileIndexPairs.begin(), fileIndexPairs.end(), [](const auto& a, const auto& b) {
-        return a.first < b.first;
-    });
-
-    // Store sorted file paths
-    for (const auto& pair : fileIndexPairs) {
-        m_dataFiles.emplace_back(pair.second);
-    }
-
-    std::cout << "Found and sorted " << m_dataFiles.size() << " .dat files.\n";
+    // Sort files by their names (if numeric sorting is required, adjust logic)
+    std::sort(m_dataFiles.begin(), m_dataFiles.end());
 }
 
-std::vector<Photon> RaypathServer::servePhotons(size_t n)
-{
-    std::vector<Photon> photons;
-    size_t photonsServed = 0;
+// Serve ray paths
+std::vector<RayPath> RaypathServer::serveRayPaths(size_t n) {
+    std::vector<RayPath> rayPaths;
+    size_t rayPathsServed = 0;
 
-    const size_t memoryThreshold = gcf::getMemoryThreshold();
-    const size_t maxDoublesPerBatch = memoryThreshold / sizeof(double);
-    const size_t maxPhotonsPerBatch = maxDoublesPerBatch / 8; // 8 doubles per photon record
-
-    while (photonsServed < n && m_currentFileIndex < m_dataFiles.size())
-    {
-        const auto &dataFile = m_dataFiles[m_currentFileIndex];
-        std::ifstream file(dataFile, std::ios::binary);
-
-        if (!file.is_open())
-        {
-            throw std::runtime_error("Failed to open .dat file: " + dataFile);
+    while (rayPathsServed < n) {
+        if (m_fileBuffer.empty() || m_currentPhotonIndex >= m_fileBuffer.size() / recordSize) {
+            if (m_currentFileIndex >= m_dataFiles.size()) {
+                break; // No more files to read
+            }
+            loadFileBuffer();
         }
 
-        // Move file pointer to the current photon position
-        file.seekg(m_currentPhotonIndex * 8 * sizeof(double), std::ios::beg);
-
-        // Calculate remaining records in the current file
-        file.seekg(0, std::ios::end);
-        size_t totalRecordsInFile = file.tellg() / (8 * sizeof(double));
-        file.seekg(m_currentPhotonIndex * 8 * sizeof(double), std::ios::beg);
-
-        size_t remainingRecordsInFile = totalRecordsInFile - m_currentPhotonIndex;
-        size_t recordsToRead = std::min({n - photonsServed, remainingRecordsInFile, maxPhotonsPerBatch});
-
-        // Read batch of doubles
-        std::vector<double> buffer(recordsToRead * 8); // 8 doubles per photon
-        file.read(reinterpret_cast<char *>(buffer.data()), recordsToRead * 8 * sizeof(double));
-
-        if (file.gcount() != recordsToRead * 8 * sizeof(double))
-        {
-            throw std::runtime_error("Error reading photon data from file: " + dataFile);
-        }
-
-        // Convert data to native endianness and populate the Photon structures
-        for (size_t i = 0; i < recordsToRead; ++i)
-        {
-            Photon photon;
-            photon.ID = static_cast<int32_t>( gcf::convertToNativeEndian(buffer[i * 8 + 0]) );
-            photon.x = gcf::convertToNativeEndian(buffer[i * 8 + 1]);
-            photon.y = gcf::convertToNativeEndian(buffer[i * 8 + 2]);
-            photon.z = gcf::convertToNativeEndian(buffer[i * 8 + 3]);
-            photon.side = static_cast<int32_t>( gcf::convertToNativeEndian(buffer[i * 8 + 4]) );
-            photon.previousID = static_cast<int32_t>( gcf::convertToNativeEndian(buffer[i * 8 + 5]) );
-            photon.nextID = static_cast<int32_t>( gcf::convertToNativeEndian(buffer[i * 8 + 6]) );
-            photon.surfaceID = static_cast<int32_t>( gcf::convertToNativeEndian(buffer[i * 8 + 7]) );
-
-            photons.push_back(photon);
-            photonsServed++;
-        }
-
-        m_currentPhotonIndex += recordsToRead;
-        if (m_currentPhotonIndex >= totalRecordsInFile)
-        {
-            m_currentPhotonIndex = 0;
-            m_currentFileIndex++;
-        }
+        processPhotonsInBuffer(rayPaths, rayPathsServed, n);
     }
 
-    // if (photonsServed < n)
-    // {
-    //     std::cerr << "Warning: Requested " << n << " photons, but only " << photonsServed << " available.\n";
-    // }
+    return rayPaths;
+}
 
-    return photons;
+void RaypathServer::loadFileBuffer() {
+    // Open the current .dat file
+    const auto& dataFile = m_dataFiles[m_currentFileIndex];
+    std::ifstream file(dataFile, std::ios::binary);
+
+    if (!file.is_open()) {
+        throw std::runtime_error("Failed to open .dat file: " + dataFile);
+    }
+
+    // Determine the file size
+    file.seekg(0, std::ios::end);
+    size_t fileSize = file.tellg();
+    file.seekg(0, std::ios::beg);
+
+    // Calculate the number of records in the file
+    size_t numRecords = fileSize / (recordSize * sizeof(double));
+
+    // Resize the buffer to hold all the photons in the file
+    m_fileBuffer.resize(numRecords * recordSize);
+
+    // Read the file into the buffer
+    file.read(reinterpret_cast<char*>(m_fileBuffer.data()), fileSize);
+
+    if (file.gcount() != static_cast<std::streamsize>(fileSize)) {
+        throw std::runtime_error("Error reading data from .dat file: " + dataFile);
+    }
+
+    // Convert data to native endianness if necessary
+    for (size_t i = 0; i < m_fileBuffer.size(); ++i) {
+        m_fileBuffer[i] = gcf::convertToNativeEndian(m_fileBuffer[i]);
+    }
+
+    // Reset the photon index for the newly loaded file
+    m_currentPhotonIndex = 0;
+
+    // Move to the next file for subsequent reads
+    m_currentFileIndex++;
+}
+
+void RaypathServer::processPhotonsInBuffer(std::vector<RayPath>& rayPaths, size_t& rayPathsServed, size_t maxRayPaths) {
+    RayPath currentRayPath; // Declare the currentRayPath variable
+
+    while (m_currentPhotonIndex < m_fileBuffer.size() / recordSize) {
+        Photon photon;
+
+        size_t offset = m_currentPhotonIndex * recordSize;
+        photon.ID = static_cast<int32_t>(m_fileBuffer[offset + 0]);
+        photon.x = m_fileBuffer[offset + 1];
+        photon.y = m_fileBuffer[offset + 2];
+        photon.z = m_fileBuffer[offset + 3];
+        photon.side = static_cast<int32_t>(m_fileBuffer[offset + 4]);
+        photon.previousID = static_cast<int32_t>(m_fileBuffer[offset + 5]);
+        photon.nextID = static_cast<int32_t>(m_fileBuffer[offset + 6]);
+        photon.surfaceID = static_cast<int32_t>(m_fileBuffer[offset + 7]);
+
+        m_currentPhotonIndex++;
+
+        if (photon.previousID == 0) {
+            // This indicates the start of a new ray path
+            if (!currentRayPath.photons.empty()) {
+                // Only add ray paths with two or more photons
+                if (currentRayPath.photons.size() > 1) {
+                    rayPaths.push_back(currentRayPath);
+                    rayPathsServed++;
+                }
+                currentRayPath.photons.clear();
+
+                if (rayPathsServed >= maxRayPaths) {
+                    return;
+                }
+            }
+        }
+
+        currentRayPath.photons.push_back(photon);
+
+        if (photon.nextID == 0) {
+            // This indicates the end of the current ray path
+            if (currentRayPath.photons.size() > 1) {
+                rayPaths.push_back(currentRayPath);
+                rayPathsServed++;
+            }
+            currentRayPath.photons.clear();
+
+            if (rayPathsServed >= maxRayPaths) {
+                return;
+            }
+        }
+    }
 }
