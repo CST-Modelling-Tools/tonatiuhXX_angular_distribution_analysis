@@ -40,7 +40,7 @@ namespace gcf
     size_t getMemoryThreshold()
     {
         const size_t minThreshold = 256 * 1024 * 1024; // 256 MB
-        const size_t maxThreshold = 2L * 1024 * 1024 * 1024; // 2 GB
+        const size_t maxThreshold = 2UL * 1024 * 1024 * 1024; // 2 GB
 
         size_t availableMemory = getAvailableMemory();
         size_t threshold = availableMemory / 2; // Use 50% of available memory

@@ -12,6 +12,8 @@
 #include <filesystem>
 #include <iostream>
 
+#include "vec3d.h"
+
 // global constants and functions
 namespace gcf
 {
@@ -54,5 +56,13 @@ namespace gcf
 
     // Get system memory information
     size_t getAvailableMemory();
-    size_t getMemoryThreshold();    
+    size_t getMemoryThreshold();
+
+    inline vec3d transformToLocal(const vec3d& vector, const vec3d& ip, const vec3d& jp, const vec3d& kp) {
+        return vec3d(
+            dot(vector, ip),
+            dot(vector, jp),
+            dot(vector, kp)
+        );
+    }
 }

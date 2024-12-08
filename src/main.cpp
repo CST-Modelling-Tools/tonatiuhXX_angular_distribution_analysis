@@ -5,12 +5,12 @@
 #include <tuple>
 
 #include "raypathserver.h"
-#include "raypathdirectionsprocessor.h"
+#include "raypathlocalcoordinateprocessor.h"
 #include "parallelprocessor.h"
 
 int main() {
     try {
-         // Input directory and surface path for processing
+        // Input directory and surface path for processing
         std::string directoryPath = "C:/Users/manue_6t240gh/Dropbox/OpenSource/angular_distribution/data";
         std::string surfacePath = "Node/ReceiverGroup/InputAperture/InputApertureRotationX/Shape";
         std::string outputfilePath = "C:/Users/manue_6t240gh/Dropbox/OpenSource/angular_distribution/data/results.csv";
@@ -18,13 +18,16 @@ int main() {
         // Initialize the RaypathServer and Processor
         RaypathServer server(directoryPath, surfacePath);
         int32_t surfaceID = server.getReferenceSurfaceID();
-        RaypathDirectionsProcessor processor(surfaceID);
+        double tilt = 27.0 * gcf::degree;
+        vec3d surfaceCenter(0.0, 0.0, 35.0); // Replace with actual surface center coordinates
+        vec3d surfaceNormal(0.0, std::cos(tilt), -std::sin(tilt)); // Replace with actual surface normal vector
+        RaypathLocalCoordinateProcessor processor(surfaceID, surfaceCenter, surfaceNormal);
 
         // Parallel processor configuration
         size_t numThreads = std::thread::hardware_concurrency(); // Use max available threads
         size_t batchSize = 10000; // Number of ray paths processed in each batch
 
-        ParallelProcessor<std::tuple<vec3d, vec3d, double>> parallelProcessor(numThreads, batchSize);
+        ParallelProcessor<std::tuple<vec3d, double, double, double>> parallelProcessor(numThreads, batchSize);
 
         // Start timing
         auto startTime = std::chrono::high_resolution_clock::now();
@@ -43,14 +46,13 @@ int main() {
         }
 
         // Write header
-        outputFile << "PhotonAX,PhotonAY,PhotonAZ,DirectionX,DirectionY,DirectionZ,Length\n";
+        outputFile << "LocalX,LocalY,LocalZ,Length,Azimuth,Elevation\n";
 
-        // Write each result
+        // Write results to a CSV file
         for (const auto& result : results) {
-            const auto& [photonA, direction, length] = result;
-            outputFile << photonA.x << "," << photonA.y << "," << photonA.z << ","
-                       << direction.x << "," << direction.y << "," << direction.z << ","
-                       << length << "\n";
+            const auto& [localCoordinates, length, azimuth, elevation] = result;
+            outputFile << localCoordinates.x << "," << localCoordinates.y << "," << localCoordinates.z << ","
+                       << length << "," << azimuth << "," << elevation << "\n";
         }
 
         outputFile.close();
