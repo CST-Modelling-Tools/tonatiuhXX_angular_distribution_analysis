@@ -4,7 +4,8 @@ import numpy as np
 from scipy.spatial import ConvexHull
 
 # Function to plot azimuth and zenith angle with convex hull
-def plot_polar_azimuth_zenith_with_hull(csv_file, point_size=1):
+def plot_polar_azimuth_zenith_with_hull(csv_file, output_hull_file, point_size=1):
+
     # Read the CSV file
     data = pd.read_csv(csv_file)
 
@@ -46,6 +47,19 @@ def plot_polar_azimuth_zenith_with_hull(csv_file, point_size=1):
     # Show the plot
     plt.show()
 
+    # Extract hull coordinates in terms of azimuth and zenith
+    hull_azimuth = np.rad2deg(np.arctan2(y[hull.vertices], x[hull.vertices])) % 360  # Convert back to degrees
+    hull_zenith = zenith[hull.vertices]
+
+    # Append the first element to close the hull
+    hull_azimuth = np.append(hull_azimuth, hull_azimuth[:1])
+    hull_zenith = np.append(hull_zenith, hull_zenith[:1])
+
+    # Save the hull coordinates to a CSV file after plotting
+    hull_data = pd.DataFrame({'Azimuth': hull_azimuth, 'Zenith': hull_zenith})
+    hull_data.to_csv(output_hull_file, index=False)
+
 # Usage example
 csv_file_path = "C:/Users/manue_6t240gh/Dropbox/OpenSource/angular_distribution/data/results.csv"
-plot_polar_azimuth_zenith_with_hull(csv_file_path, point_size=1)
+hull_file_path = "C:/Users/manue_6t240gh/Dropbox/OpenSource/angular_distribution/data/convex_hull_coordinates.csv"
+plot_polar_azimuth_zenith_with_hull(csv_file_path, hull_file_path, point_size=0.5)
